@@ -1,11 +1,38 @@
 package main
 
 import "core:fmt"
+import "core:math/rand"
 import rl "vendor:raylib"
+import "core:strings"
+import "core:path/filepath"
 
 CARD_WIDTH :: 150
 
 CARD_HEIGHT :: 200
+
+
+load_directory_of_textures :: proc(pattern: string) -> map[string]rl.Texture2D {
+    textures := make(map[string]rl.Texture2D)
+
+    matches, _ := filepath.glob(pattern)
+
+    for match in matches {
+        index := strings.last_index_any(match, `/\`)
+        path := strings.clone(filepath.stem(match[index+1:]))
+        fmt.println(path)
+        textures[path] = rl.LoadTexture(fmt.ctprintf("%s", match))
+    }
+
+    for match in matches {
+        delete(match)
+    }
+
+    delete(matches)
+
+    return textures
+}
+
+
 
 water_levels := [Seed]int {
 	.None   = 0,
@@ -17,6 +44,13 @@ seed_rewards := [Seed][dynamic]int {
 	.None   = [dynamic]int{},
 	.Tomato = [dynamic]int{1, 2, 3},
 	.Potato = [dynamic]int{1, 0, 4, 0, 5},
+}
+
+tool_textures := [Tool]string{
+    .None = "watering_can",
+    .WateringCan = "watering_can",
+    .WateringScyte = "watering_can",
+    .Scyte =  "watering_can"
 }
 
 
@@ -44,20 +78,8 @@ SeedCard :: struct {
 	water_levels: int,
 }
 
-ToolNone :: struct {}
-
-WateringCan :: struct {
-	power: int,
-}
-
-Scyte :: struct {}
-
-WateringScyte :: struct {
-	power: int,
-}
-
-Tool :: union {
-	ToolNone,
+Tool :: enum {
+	None,
 	WateringCan,
 	WateringScyte,
 	Scyte,
@@ -66,6 +88,7 @@ Tool :: union {
 PlayerHand :: struct {
 	using box: Box,
 	tool:      Tool,
+    texture:   rl.Texture2D,
 }
 
 Box :: struct {
@@ -85,25 +108,39 @@ Player :: struct {
 	seeds:    [dynamic]SeedCard,
 	tools:    [15]Tool,
 	hand:     [5]PlayerHand,
+    dragging_target: ^PlayerHand,
+    dragging: bool,
 }
 
-init_player :: proc() -> ^Player {
-	player := new(Player)
+random_hand :: proc(textures: map[string]rl.Texture2D) -> [5]PlayerHand {
+    hand := [5]PlayerHand{}
 
-	player.money = 0
-	player.upgrades = make([dynamic]Upgrade)
-	player.fields = make([dynamic]Field, 3)
-	player.seeds = make([dynamic]SeedCard, 0)
+    seed := u64(1337)
+    r := rand.create(seed)
+    context.random_generator = rand.default_random_generator(&r)
+    for &card in hand {
+        tool: Tool = .WateringCan
+        card.tool = tool
+        texture_name := tool_textures[tool]
+        card.texture = textures[texture_name]
+    }
 
-	gap := 20
+    init_hand(hand)
 
-	w := len(player.hand) * gap + len(player.hand) * CARD_WIDTH
+    return hand
+}
+
+init_hand :: proc(hand: [5]PlayerHand) {
+
+    gap := 20
+
+	w := len(hand) * gap + len(hand) * CARD_WIDTH
 
 	middle := f32(w) * 0.5
 
 	center := f32(rl.GetScreenWidth()) * 0.5
 
-	for &card, i in player.hand {
+	for &card, i in hand {
 		x := i32(i * CARD_WIDTH + ((i + 1) * gap) + int(center) - int(middle))
 
 		card.rect = rl.Rectangle {
@@ -113,6 +150,22 @@ init_player :: proc() -> ^Player {
 			height = CARD_HEIGHT,
 		}
 	}
+
+}
+
+init_player :: proc(textures: map[string]rl.Texture2D) -> ^Player {
+	player := new(Player)
+
+	player.money = 0
+	player.upgrades = make([dynamic]Upgrade)
+	player.fields = make([dynamic]Field, 3)
+	player.seeds = make([dynamic]SeedCard, 0)
+
+    init_hand(player.hand)
+
+    gap := 20
+
+    center := f32(rl.GetScreenWidth()) * 0.5
 
 	wfl := len(player.fields) * gap + len(player.fields) * CARD_WIDTH
 
@@ -129,6 +182,9 @@ init_player :: proc() -> ^Player {
 
 	}
 
+    player.hand = random_hand(textures)
+
+
 	return player
 }
 
@@ -144,36 +200,68 @@ debug_rect :: proc(rect: rl.Rectangle) {
 	rl.DrawRectangleLines(i32(rect.x), i32(rect.y), i32(rect.width), i32(rect.height), rl.RED)
 }
 
+draw_fields :: proc(player: ^Player) {
+
+    for &field in player.fields {
+			rl.DrawRectangleRec(field.rect, rl.DARKBROWN)
+			rl.DrawText(
+				fmt.ctprintf("%d", field.water_level),
+				i32(field.rect.x),
+				i32(field.rect.y),
+				20,
+				rl.WHITE,
+			)
+		}
+}
+
+draw_hand :: proc(player: ^Player) {
+
+    for i in 0 ..< len(player.hand) {
+        card := &player.hand[i]
+        switch card.tool {
+            case .None:
+            case .WateringCan, .Scyte, .WateringScyte:
+            if card != player.dragging_target {
+                draw_card(card.rect, card.texture)
+            }
+        }
+    }
+
+    for i in 0 ..< len(player.hand) {
+        card := &player.hand[i]
+        if card == player.dragging_target {
+            mpr := rl.Rectangle {
+                x      = f32(rl.GetMousePosition().x - CARD_WIDTH * 0.5),
+                y      = f32(rl.GetMousePosition().y - CARD_HEIGHT * 0.5),
+                width  = f32(CARD_WIDTH),
+                height = f32(CARD_HEIGHT),
+            }
+
+            draw_card(mpr, card.texture)
+        }
+    }
+}
+
+
 main :: proc() {
 
 	rl.InitWindow(1200, 800, "Ogwring season")
 
 	rl.SetTargetFPS(60)
 
-	player := init_player()
+    textures := load_directory_of_textures("assets/*.png")
 
-	wc := rl.LoadTexture("watering_can.png")
-
-	//fmt.printf("%#v\n", player)
-
-	// state
-
-	dragging := false
-	dragging_target: ^PlayerHand = nil
-
-
-	//-----------
-
+	player := init_player(textures)
+    fmt.printf("%#v\n", player)
 
 	for !rl.WindowShouldClose() {
-
 
 		if rl.IsMouseButtonReleased(.LEFT) {
 
             fields: [dynamic]^Field
             collision_recs: [dynamic]rl.Rectangle
 
-			if dragging {
+			if player.dragging {
 				mpr := rl.Rectangle {
 					x      = f32(rl.GetMousePosition().x - CARD_WIDTH * 0.5),
 					y      = f32(rl.GetMousePosition().y - CARD_HEIGHT * 0.5),
@@ -193,42 +281,43 @@ main :: proc() {
 
             if len(fields) == 1 {
                 fields[0].water_level += 1
+                player.dragging_target.tool = .None
             }
 
             if len(fields) > 1 {
                 field: ^Field
                 cr := rl.Rectangle{}
-                acr := cr.width * cr.height
+                acr := f32(0)
 
                 for i in 0..<len(fields) {
                     area := collision_recs[i].width * collision_recs[i].height
 
                     if area > acr {
+                        acr = area
                         field = fields[i]
                         cr = collision_recs[i]
                     }
                 }
 
-                fmt.printf("winner=%#v\n", field)
+                assert(field != nil)
+
+                field.water_level += 1
+                player.dragging_target.tool = .None
             }
 
-			dragging = false
-			dragging_target = nil
-
-            fmt.printf("len fields=%d\n", len(fields))
-            fmt.printf("len collision_recs=%d\n", len(collision_recs))
+			player.dragging = false
+			player.dragging_target = nil
 		}
 
 
 		if rl.IsMouseButtonDown(.LEFT) {
 			for &card in player.hand {
-				switch card.tool {
-				// TODO: idk if using unions for this is a good choice
-				case WateringCan{}:
+                #partial switch card.tool {
+				case .WateringCan:
 					if rl.CheckCollisionPointRec(rl.GetMousePosition(), card.rect) {
-						if dragging {continue}
-						dragging = true
-						dragging_target = &card
+						if player.dragging {continue}
+						player.dragging = true
+						player.dragging_target = &card
 					}
 				}
 
@@ -238,76 +327,15 @@ main :: proc() {
 		rl.BeginDrawing()
 		rl.ClearBackground(rl.DARKGREEN)
 
-		for &field in player.fields {
-			rl.DrawRectangleRec(field.rect, rl.DARKBROWN)
-			rl.DrawText(
-				fmt.ctprintf("%d", field.water_level),
-				i32(field.rect.x),
-				i32(field.rect.y),
-				20,
-				rl.WHITE,
-			)
-		}
 
+        draw_fields(player)
 
-		for i in 0 ..< len(player.hand) {
+        draw_hand(player)
 
-			card := &player.hand[i]
-
-			switch card.tool {
-			case WateringCan{}:
-				if card != dragging_target {
-					draw_card(card.rect, wc)
-				}
-			}
-
-		}
-
-		for i in 0 ..< len(player.hand) {
-			card := &player.hand[i]
-			if card == dragging_target {
-				mpr := rl.Rectangle {
-					x      = f32(rl.GetMousePosition().x - CARD_WIDTH * 0.5),
-					y      = f32(rl.GetMousePosition().y - CARD_HEIGHT * 0.5),
-					width  = f32(CARD_WIDTH),
-					height = f32(CARD_HEIGHT),
-				}
-
-				draw_card(mpr, wc)
-			}
-		}
 
 
 		rl.EndDrawing()
 	}
 
 	rl.CloseWindow()
-}
-
-main2 :: proc() {
-	player := init_player()
-
-	player.fields[0].card = SeedCard {
-		seed         = .Potato,
-		price        = 2,
-		water_levels = 5,
-	}
-	player.fields[0].water_level = 0
-
-
-	for &field in player.fields {
-		if field.card.seed != .None {
-			rewards := seed_rewards[field.card.seed]
-
-			field.water_level += 3
-
-			assert(field.water_level < len(rewards))
-
-			reward := rewards[field.water_level - 1]
-
-			fmt.printf("reward is %d\n", reward)
-		}
-	}
-
-
 }
