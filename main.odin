@@ -169,7 +169,9 @@ main :: proc() {
 
 
 		if rl.IsMouseButtonReleased(.LEFT) {
-			collisioned := false
+
+            fields: [dynamic]^Field
+            collision_recs: [dynamic]rl.Rectangle
 
 			if dragging {
 				mpr := rl.Rectangle {
@@ -181,17 +183,40 @@ main :: proc() {
 
 
 				for &field in player.fields {
-					if collisioned {break}
 					if rl.CheckCollisionRecs(mpr, field.rect) {
-						field.water_level += 1
-						dragging_target.tool = ToolNone{}
-						collisioned = true
+                        append(&fields, &field)
+                        cr := rl.GetCollisionRec(mpr, field.rect)
+                        append(&collision_recs, cr)
 					}
 				}
 			}
 
+            if len(fields) == 1 {
+                fields[0].water_level += 1
+            }
+
+            if len(fields) > 1 {
+                field: ^Field
+                cr := rl.Rectangle{}
+                acr := cr.width * cr.height
+
+                for i in 0..<len(fields) {
+                    area := collision_recs[i].width * collision_recs[i].height
+
+                    if area > acr {
+                        field = fields[i]
+                        cr = collision_recs[i]
+                    }
+                }
+
+                fmt.printf("winner=%#v\n", field)
+            }
+
 			dragging = false
 			dragging_target = nil
+
+            fmt.printf("len fields=%d\n", len(fields))
+            fmt.printf("len collision_recs=%d\n", len(collision_recs))
 		}
 
 
